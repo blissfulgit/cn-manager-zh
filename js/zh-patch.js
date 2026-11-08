@@ -124,7 +124,6 @@ const DICT = {
 	"Filename": "文件名",
 	"Last Update": "最近更新",
 	"Used in": "用于",
-	"ID": "ID",
 
 	// —— 主菜单表单 ——
 	"ComfyUI Manager Menu": "管理器菜单",

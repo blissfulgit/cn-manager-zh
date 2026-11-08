@@ -1,5 +1,8 @@
 # cn-manager-zh
 
+[![CI](https://github.com/blissfulgit/cn-manager-zh/actions/workflows/ci.yml/badge.svg)](https://github.com/blissfulgit/cn-manager-zh/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 ComfyUI-Manager 简体中文补丁 —— **不改 Manager 源码**，装完刷新浏览器即生效，Manager 升级也不会失效。
 
 > ComfyUI 主界面（画布、菜单、设置）已经有官方 i18n，可以切成中文；但 ComfyUI-Manager 注入的面板是独立 DOM，官方至今没有中文。
@@ -17,6 +20,16 @@ ComfyUI-Manager 简体中文补丁 —— **不改 Manager 源码**，装完刷�
 | 顶部提示浮层（startup alerts / toast） | ✅ |
 
 不翻译的内容（有意为之）：包名、模型名、版本号、作者、描述正文、新闻内容 —— 这些是数据不是 UI，翻了反而找不到东西。
+
+## 截图
+
+<table>
+  <tr>
+    <td align="center" width="33%"><a href="docs/01-menu.png"><img src="docs/01-menu.png" alt="主菜单"></a><br><sub>主菜单</sub></td>
+    <td align="center" width="33%"><a href="docs/02-models.png"><img src="docs/02-models.png" alt="模型管理"></a><br><sub>模型管理</sub></td>
+    <td align="center" width="33%"><a href="docs/03-nodes.png"><img src="docs/03-nodes.png" alt="节点管理"></a><br><sub>节点管理</sub></td>
+  </tr>
+</table>
 
 ## 安装
 
@@ -97,6 +110,26 @@ MutationObserver 监听 body
 - ComfyUI 0.44.0 / frontend 1.57.6 实测通过
 - ComfyUI-Manager 3.42 实测通过
 - Manager 大版本升级后如果新增了大量文案，词表可能需要补几条
+
+## 开发
+
+不需要装 ComfyUI 也能跑检查（只要有 Node 18+ / Python 3.11+）：
+
+```bash
+# 语法（zh-patch.js 是 ESM，需复制成 .mjs 再检查）
+cp js/zh-patch.js /tmp/zh-patch.mjs && node --check /tmp/zh-patch.mjs
+
+# 词表：自映射、重复 key、空值、结构完整性
+node tests/check-dict.mjs
+
+# 无 DOM 加载：把 app 换成桩，验证顶层代码不抛错、扩展能注册
+node tests/load-module.mjs
+
+# Python 侧
+python -m py_compile __init__.py
+```
+
+CI（`.github/workflows/ci.yml`）在每次 push / PR 时跑上面全部四项。
 
 ## License
 

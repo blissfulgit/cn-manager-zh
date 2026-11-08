@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  js:
+    name: JS 语法 / 词表 / 加载
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # zh-patch.js 是 ES module，直接 node --check 会被当 CJS 解析，
+      # 复制成 .mjs 才能按 module 语法校验。
+      - name: 语法检查
+        run: |
+          cp js/zh-patch.js "$RUNNER_TEMP/zh-patch.mjs"
+          node --check "$RUNNER_TEMP/zh-patch.mjs"
+          echo "语法检查通过"
+
+      - name: 词表检查
+        run: node tests/check-dict.mjs
+
+      - name: 无 DOM 加载测试
+        run: node tests/load-module.mjs
+
+  python:
+    name: Python 编译 / 元数据
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 编译 __init__.py
+        run: |
+          python -m py_compile __init__.py
+          echo "py_compile 通过"
+
+      - name: 校验 pyproject.toml
+        run: |
+          python - <<'PY'
+          import pathlib
+          import tomllib
+
+          data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          project = data.get("project")
+          assert project, "pyproject.toml 缺少 [project]"
+          for key in ("name", "version", "description", "license"):
+              assert key in project, f"pyproject.toml 缺少 project.{key}"
+          print("pyproject OK:", project["name"], project["version"])
+          PY
