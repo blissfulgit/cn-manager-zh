@@ -44,11 +44,14 @@ git clone https://github.com/blissfulgit/cn-manager-zh.git
 
 ## 开关
 
-浏览器控制台执行：
+**默认行为**：跟随 ComfyUI 自己的语言设置（`Comfy.Locale`）——语言是 `zh*` 才自动开启，英文界面下装了也不会被强制汉化。
+
+想强制开 / 关，在浏览器控制台执行：
 
 ```js
 localStorage.setItem("cn-manager-zh.enabled", "0");  // 关闭，刷新后恢复英文
-localStorage.setItem("cn-manager-zh.enabled", "1");  // 开启
+localStorage.setItem("cn-manager-zh.enabled", "1");  // 强制开启
+localStorage.removeItem("cn-manager-zh.enabled");    // 恢复「跟随语言设置」
 ```
 
 也可以直接在 ComfyUI 的 Custom Nodes Manager 里禁用本扩展。
@@ -80,9 +83,9 @@ window.cnManagerZh.add({
 ```
 MutationObserver 监听 body
   └─ 新增节点 / 文本变更 / 属性变更
-       └─ 判断是否在 Manager 作用域内
-            ├─ [class*="cm-"] / [class*="cn-"] / [class*="cmm-"] / [class*="nu-"]
-            ├─ [class*="toast"] / ol[class*="pointer-events-none"]（提示浮层）
+       └─ 判断是否在 Manager 作用域内（token 前缀匹配，不是子串匹配）
+            ├─ class 以 cm- / cmm- / cn- / nu- 开头
+            ├─ 提示浮层（toast），且文本里提到 Manager
             └─ .comfy-modal 且内部含 Manager 元素
        └─ 查词表 → 替换文本节点 / title / placeholder / aria-label
 ```
@@ -90,10 +93,12 @@ MutationObserver 监听 body
 几个实现上的坑，写在这儿省得后来人再踩：
 
 1. **不能全局替换包名**。`ComfyUI-Manager` 同时出现在 UI 标题和表格数据里，早期版本用了全局正则，结果表格里的包名和描述被翻成中英混杂 —— 现在只匹配 `^ComfyUI[- ]Manager V[\d.]+$` 这种完整标题。
-2. **数据单元格要排除**。Manager 的表格用 `classMap` 给数据列打标记（`.cn-pack-name`、`.cn-pack-desc`、`.cmm-node-name` 等），按这些 class 直接跳过。
-3. **`INPUT` 要翻译属性但不能进文本遍历**。`placeholder` 是属性，不在文本节点里；而 `INPUT` 子树又没意义，容易漏。
-4. **新前端的 toast 没有 toast 字样**。它是裸 `<ol class="pointer-events-none ...">`，不用 `ol[class*="pointer-events-none"]` 就抓不到。
-5. **写回文本会再次触发 observer**，需要 `busy` 标志防抖，否则死循环。
+2. **作用域必须用 token 前缀，不能用子串**。`[class*="nu-"]` 会把 `comfy-menu-bg`、`comfy-context-menu-filter` 这类**核心 UI**也判进作用域（`menu-` 里就含 `nu-`），结果是 ComfyUI 自己的右键菜单被翻译。必须写成 `[class^="nu-"], [class*=" nu-"]`。实测前端 assets 里有 74 个核心 class 含 `nu-` 子串。
+3. **属性翻译同样要过作用域判断**。`title` / `placeholder` / `aria-label` 不在文本节点里，很容易写漏守卫，一漏就会改到全站按钮的 tooltip。
+4. **数据单元格要排除**。Manager 的表格用 `classMap` 给数据列打标记（`.cn-pack-name`、`.cn-pack-desc`、`.cmm-node-name` 等），按这些 class 直接跳过。
+5. **`INPUT` 要翻译属性但不能进文本遍历**。`placeholder` 是属性，不在文本节点里；而 `INPUT` 子树又没意义，容易漏。
+6. **新前端的 toast 没有 toast 字样**。它是裸 `<ol class="pointer-events-none ...">`。但这是全站通用容器，所以只翻**文本里提到 Manager** 的提示，否则 ComfyUI 自己的 `Error` / `Success` 也会被改。
+7. **写回文本会再次触发 observer**，但**不需要**防抖标志：替换是幂等的（中文译文不会再命中英文词表），第二轮查表必然返回 null，不会死循环。早期版本加过 `busy` 标志，其实是无效代码——MutationObserver 回调是异步微任务，同步置位根本拦不住。
 
 ## 与其他项目的区别
 
@@ -110,6 +115,21 @@ MutationObserver 监听 body
 - ComfyUI 0.44.0 / frontend 1.57.6 实测通过
 - ComfyUI-Manager 3.42 实测通过
 - Manager 大版本升级后如果新增了大量文案，词表可能需要补几条
+
+## 更新日志
+
+### 1.0.1
+
+- **修复**：作用域判定从子串匹配改为 token 前缀匹配。之前 `[class*="nu-"]` 会命中 `comfy-menu-*` / `comfy-context-menu-filter` 等 74 个核心 class，导致 ComfyUI 自己的右键菜单和顶栏也被翻译。
+- **修复**：`title` / `placeholder` / `aria-label` 的翻译补上作用域判断，不再改到全站按钮的 tooltip 和搜索框。
+- **修复**：toast 只在文本提到 Manager 时翻译，不再改 ComfyUI 自身的提示。
+- **改进**：默认跟随 `Comfy.Locale`，英文界面下不会强制汉化。
+- **改进**：新增子树先做一次 `querySelector` 预筛，没命中 Manager 就整棵跳过。
+- **清理**：删除无效的 `busy` 防抖标志（MutationObserver 回调是异步的，同步置位拦不住）。
+
+### 1.0.0
+
+- 首个版本，覆盖主菜单 / 模型管理 / 节点管理 / 节点占用分析 / 快照管理。
 
 ## 开发
 

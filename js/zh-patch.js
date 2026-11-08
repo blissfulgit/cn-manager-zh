@@ -6,7 +6,8 @@
  *
  * 开关：
  *   localStorage.setItem("cn-manager-zh.enabled", "0")  // 关闭
- *   localStorage.setItem("cn-manager-zh.enabled", "1")  // 开启（默认）
+ *   localStorage.setItem("cn-manager-zh.enabled", "1")  // 开启
+ *   没有设置过时跟随 ComfyUI 的语言（Comfy.Locale 以 zh 开头才自动开启）
  *
  * 运行时扩展词表：
  *   window.cnManagerZh.add({ "Some English": "某中文" })
@@ -14,7 +15,7 @@
 
 import { app } from "../../scripts/app.js";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const LS_KEY = "cn-manager-zh.enabled";
 
 // ---------------------------------------------------------------------------
@@ -141,6 +142,8 @@ const DICT = {
 	"Channel (1day cache)": "通道（1 天缓存）",
 	"Channel (7day cache)": "通道（7 天缓存）",
 	"Channel (cache)": "通道（缓存）",
+	"Channel (remote)": "通道（远程）",
+	"Channel (local)": "通道（本地）",
 	"default": "默认",
 	"Auto": "自动",
 	"None": "无",
@@ -190,28 +193,42 @@ const PATTERNS = [
 
 // ---------------------------------------------------------------------------
 // 作用域：只翻译 ComfyUI-Manager 注入的 DOM
+//
+// 关键：必须按 class 的「token 前缀」匹配，不能用 [class*="nu-"] 这种子串匹配。
+// menu-button / comfy-menu-bg / comfy-context-menu-filter 里都含 "nu-" 子串，
+// 子串匹配会把 ComfyUI 自己的右键菜单和顶栏一起判进作用域。
 // ---------------------------------------------------------------------------
-const MANAGER_CLASS_SEL = '[class*="cm-"], [class*="cn-"], [class*="cmm-"], [class*="nu-"]';
+const TOKEN_PREFIXES = ["cm-", "cmm-", "cn-", "nu-"];
+const MANAGER_CLASS_SEL = TOKEN_PREFIXES
+	.map((p) => `[class^="${p}"], [class*=" ${p}"]`)
+	.join(", ");
+
 const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "TEXTAREA", "CANVAS", "CODE", "PRE", "INPUT"]);
 const ATTRS = ["title", "placeholder", "aria-label"];
 
-let busy = false;
-let enabled = true;
-
 const DATA_CELL_SEL = ".cn-pack-name, .cn-pack-version, .cn-pack-desc, .cmm-node-name, .cmm-node-desc, .nu-pack-name";
 
-function inManagerScope(el) {
-	if (!el) return false;
+// ComfyUI 全局提示容器（新前端的 toast 列表是裸 <ol class="pointer-events-none ...">）
+const TOAST_SEL = '[class*="toast"], ol[class*="pointer-events-none"]';
+
+// 只翻「提到 Manager」的提示，避免把 ComfyUI 自己的 Error / Success 一起改了
+const MANAGER_HINT = /manager/i;
+
+let enabled = true;
+
+/**
+ * 判定元素所处的可见范围。
+ * @returns {"manager"|"toast"|null}
+ */
+function scopeKind(el) {
+	if (!el) return null;
 	// 表格里的数据（包名、版本、描述）属于内容，不是 UI 文案
-	if (el.closest(DATA_CELL_SEL)) return false;
-	if (el.closest(MANAGER_CLASS_SEL)) return true;
-	// ComfyUI 核心的提示容器：Manager 的 startup alerts 常常挂在这里
-	// （新前端的 toast 列表是裸 <ol class="pointer-events-none ...">，没有 toast 字样）
-	if (el.closest('[class*="toast"]')) return true;
-	if (el.closest('ol[class*="pointer-events-none"]')) return true;
+	if (el.closest(DATA_CELL_SEL)) return null;
+	if (el.closest(MANAGER_CLASS_SEL)) return "manager";
+	if (el.closest(TOAST_SEL)) return "toast";
 	const modal = el.closest(".comfy-modal");
-	if (!modal) return false;
-	return !!modal.querySelector(MANAGER_CLASS_SEL);
+	if (modal && modal.querySelector(MANAGER_CLASS_SEL)) return "manager";
+	return null;
 }
 
 function lookup(text) {
@@ -230,35 +247,43 @@ function translateText(node) {
 	const raw = node.nodeValue;
 	if (!raw || !raw.trim()) return;
 	const el = node.parentElement;
-	if (!el || !inManagerScope(el)) return;
+	if (!el) return;
+	const kind = scopeKind(el);
+	if (!kind) return;
+	// 全站 toast 里只处理提到 Manager 的提示
+	if (kind === "toast" && !MANAGER_HINT.test(raw)) return;
 	const hit = lookup(raw);
 	if (!hit) return;
 	const next = raw.replace(hit.from, hit.to);
 	if (next === raw) return;
-	busy = true;
+	// 写回会再次触发 observer，但替换是幂等的（中文不会再命中英文词表），不会死循环
 	node.nodeValue = next;
-	busy = false;
 }
 
 function translateAttrs(el) {
+	if (!el || typeof el.getAttribute !== "function") return;
+	const kind = scopeKind(el);
+	// toast 只翻文本，不碰属性
+	if (kind !== "manager") return;
 	for (const attr of ATTRS) {
-		const val = el.getAttribute && el.getAttribute(attr);
+		const val = el.getAttribute(attr);
 		if (!val || !val.trim()) continue;
 		const hit = lookup(val);
 		if (!hit) continue;
-		busy = true;
 		el.setAttribute(attr, val.replace(hit.from, hit.to));
-		busy = false;
 	}
 }
 
-function walkText(root) {
+function walkText(root, force = false) {
 	if (!root) return;
 	if (root.nodeType === Node.TEXT_NODE) {
 		translateText(root);
 		return;
 	}
 	if (root.nodeType !== Node.ELEMENT_NODE) return;
+
+	// 预筛：新增子树自身不在 Manager 里、内部也没有 Manager 元素 → 整棵跳过
+	if (!force && !scopeKind(root) && !root.querySelector(MANAGER_CLASS_SEL) && !root.querySelector(TOAST_SEL)) return;
 
 	translateAttrs(root);
 	if (SKIP_TAGS.has(root.tagName)) return;
@@ -283,7 +308,7 @@ function walkText(root) {
 }
 
 function onMutations(mutations) {
-	if (busy || !enabled) return;
+	if (!enabled) return;
 	for (const m of mutations) {
 		if (m.type === "characterData") {
 			translateText(m.target);
@@ -307,14 +332,41 @@ function start() {
 		attributes: true,
 		attributeFilter: ATTRS,
 	});
-	walkText(document.body);
+	// 首屏无条件扫一遍：此时 Manager 面板通常还没渲染，但提示浮层可能已经在
+	walkText(document.body, true);
 	console.log(`[cn-manager-zh] v${VERSION} 已启用`);
+}
+
+/** 取 ComfyUI 当前语言，取不到返回空串 */
+function appLocale() {
+	try {
+		const viaExt = app?.extensionManager?.setting?.get?.("Comfy.Locale");
+		if (typeof viaExt === "string" && viaExt) return viaExt;
+	} catch (e) {
+		/* 老版本前端没有这个 API */
+	}
+	try {
+		const viaUi = app?.ui?.settings?.getSettingValue?.("Comfy.Locale");
+		if (typeof viaUi === "string" && viaUi) return viaUi;
+	} catch (e) {
+		/* ignore */
+	}
+	const lang = document.documentElement.lang || navigator.language || "";
+	return typeof lang === "string" ? lang : "";
 }
 
 app.registerExtension({
 	name: "cn.manager.zh",
 	setup() {
-		enabled = localStorage.getItem(LS_KEY) !== "0";
+		const stored = localStorage.getItem(LS_KEY);
+		if (stored !== null) {
+			// 用户显式开关过，以用户的为准
+			enabled = stored !== "0";
+		} else {
+			// 否则跟随 ComfyUI 语言；语言取不到时保持开启（这个包本来就是中文用户主动装的）
+			const loc = appLocale();
+			enabled = loc ? /^zh/i.test(loc) : true;
+		}
 		if (enabled) start();
 	},
 });
@@ -324,7 +376,7 @@ window.cnManagerZh = {
 	version: VERSION,
 	add(map) {
 		Object.assign(DICT, map);
-		walkText(document.body);
+		walkText(document.body, true);
 	},
 	disable() {
 		enabled = false;
@@ -334,7 +386,7 @@ window.cnManagerZh = {
 		enabled = true;
 		localStorage.setItem(LS_KEY, "1");
 		if (!observer) start();
-		else walkText(document.body);
+		else walkText(document.body, true);
 	},
 	dict: DICT,
 };
